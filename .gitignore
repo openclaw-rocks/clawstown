@@ -1,0 +1,18 @@
+# Secrets -- never commit real values
+*.secret
+*.env
+secrets.yaml
+
+# Kind cluster state
+.kind/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.vscode/
+.idea/
