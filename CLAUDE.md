@@ -102,13 +102,19 @@ Default configuration is 2 agents. This is enough to demonstrate coordination (o
 
 ### Prompts
 
-- The agent prompt lives in `prompts/agent.md`
+- The agent prompt lives in `prompts/agent.md` and is injected as `AGENTS.md` into the workspace (OpenClaw auto-loads this file into the agent's context on startup)
 - The prompt must instruct agents to read SWARM.md from the target repo
 - The prompt must instruct agents to communicate through GitHub (issues, PR comments)
 - The prompt must require peer review before merging PRs
 - The prompt must instruct agents to run tests after merging and create issues from failures
 - Prompts should be model-agnostic where possible (don't rely on Claude-specific features)
 - Keep prompts focused — the agent's power comes from OpenClaw's capabilities, not from prompt length
+
+### Skills
+
+- Agents are deployed with the `gh-issues` skill, which provides GitHub interaction via `curl` + REST API (no `gh` CLI required)
+- The `gh-issues` skill uses the `GH_TOKEN` environment variable for authentication (injected via the `clawstown-github` secret)
+- Do not depend on `gh` CLI being available — it is not installed in the OpenClaw container images
 
 ### Coordination Protocol
 

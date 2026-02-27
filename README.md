@@ -160,7 +160,7 @@ cd clawstown
 1. A Kind cluster spins up (or the provided kubeconfig is used)
 2. The [OpenClaw Operator](https://github.com/openclaw-rocks/k8s-operator) is installed via Helm
 3. API keys and GitHub tokens are stored as Kubernetes Secrets
-4. Agent instances are deployed with the self-organizing prompt and GitHub access
+4. Agent instances are deployed with the self-organizing prompt (`AGENTS.md`), `gh-issues` skill, and GitHub access
 5. The first agent reads SWARM.md from the repo and creates issues
 6. Agents start claiming issues, coding, opening PRs, and reviewing each other
 7. After each merge, agents run tests and create issues from any failures
@@ -212,14 +212,16 @@ kubectl logs -f -n clawstown sts/clawstown-agent-0 -c openclaw
 
 ### Customizing Agent Behavior
 
-The agent prompt is a single Markdown file:
+The agent prompt is a single Markdown file, injected as `AGENTS.md` (which OpenClaw auto-loads into context on startup):
 
 ```
 prompts/
-  agent.md       # System prompt for all agents
+  agent.md       # System prompt for all agents (deployed as AGENTS.md)
 ```
 
 Edit this to change how agents think, plan, and collaborate. The prompt is the soul of the swarm.
+
+Agents are deployed with the `gh-issues` skill for GitHub interaction (issues, PRs, reviews) via the REST API. No `gh` CLI installation needed.
 
 ## Comparison with Gastown
 

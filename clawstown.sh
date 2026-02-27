@@ -368,6 +368,8 @@ spec:
         defaults:
           model:
             primary: "${MODEL}"
+  skills:
+    - "gh-issues"
   envFrom:
     - secretRef:
         name: clawstown-api-keys
@@ -380,6 +382,11 @@ spec:
       value: "${agent_id}"
     - name: CLAWSTOWN_AGENT_COUNT
       value: "${AGENTS}"
+    - name: GH_TOKEN
+      valueFrom:
+        secretKeyRef:
+          name: clawstown-github
+          key: GITHUB_TOKEN
   resources:
     requests:
       cpu: "500m"
@@ -397,7 +404,7 @@ spec:
       allowDNS: true
   workspace:
     initialFiles:
-      "CLAWSTOWN.md": |
+      "AGENTS.md": |
 $(indent_file "${SCRIPT_DIR}/prompts/agent.md" 8)
 EOF
 }
@@ -485,7 +492,7 @@ print_status() {
   echo "     open http://localhost:18789"
   echo ""
   echo "  3. Tell the agent to begin:"
-  echo "     \"Read CLAWSTOWN.md, then clone the repo and start working.\""
+  echo "     \"Clone the repo and start working.\""
   echo ""
   echo "  4. Monitor the swarm:"
   echo "     kubectl logs -f -n ${NAMESPACE} sts/clawstown-agent-0 -c openclaw"
