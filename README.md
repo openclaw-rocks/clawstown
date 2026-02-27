@@ -45,7 +45,7 @@ Each agent is an [OpenClaw](https://github.com/openclaw/openclaw) instance manag
 
 Gastown has a Mayor that plans all work upfront. Clawstown agents **self-organize**.
 
-Every agent is identical. The first agent to start reads `PROJECT.md` from the repository, analyzes the codebase, and creates GitHub issues. Other agents claim unclaimed issues, implement changes, and review each other's PRs. After merging, agents run the test suite and create new issues from any failures. When goals from PROJECT.md are met, they stop.
+Every agent is identical. The first agent to start reads `SWARM.md` from the repository, analyzes the codebase, and creates GitHub issues. Other agents claim unclaimed issues, implement changes, and review each other's PRs. After merging, agents run the test suite and create new issues from any failures. When goals from SWARM.md are met, they stop.
 
 No single point of failure. No coordinator bottleneck. No role assignments at deploy time. The swarm figures it out.
 
@@ -63,7 +63,7 @@ Running 30 agents at $100/hour is a bold statement. Running 2-5 agents that coor
                     |  (Human)  |
                     +-----+-----+
                           |
-                    PROJECT.md in repo
+                    SWARM.md in repo
                     (goals & focus)
                           |
                           v
@@ -90,7 +90,7 @@ Running 30 agents at $100/hour is a bold statement. Running 2-5 agents that coor
                    backbone)
                          |
                    +-----+-----+
-                   | PROJECT.md |
+                   | SWARM.md |
                    | (the spec) |
                    +------------+
 ```
@@ -99,16 +99,16 @@ Running 30 agents at $100/hour is a bold statement. Running 2-5 agents that coor
 
 All agents are structurally identical OpenClaw instances. They self-organize through a shared protocol:
 
-1. **Human** creates `PROJECT.md` in the target repository describing goals for the swarm
+1. **Human** creates `SWARM.md` in the target repository describing goals for the swarm
 2. **Human** runs `clawstown.sh` with `--repo` pointing to the repository
 3. **clawstown.sh** deploys the operator and creates N agent instances on Kubernetes
-4. **First agent** clones the repo, reads PROJECT.md, analyzes the codebase, and creates GitHub issues
+4. **First agent** clones the repo, reads SWARM.md, analyzes the codebase, and creates GitHub issues
 5. **All agents** claim unclaimed issues, create branches, implement changes, and open PRs
 6. **Agents** review each other's PRs — at least one non-author approval required before merge
 7. **After merging**, agents pull latest main and run the test suite
 8. **If tests fail**, agents create new `clawstown:failing` issues from the failures
-9. **Agents** continuously check PROJECT.md goals against the current state of the codebase
-10. **Human** steers the swarm by updating PROJECT.md — agents pick up changes on their next pull
+9. **Agents** continuously check SWARM.md goals against the current state of the codebase
+10. **Human** steers the swarm by updating SWARM.md — agents pick up changes on their next pull
 
 ### Why GitHub for Coordination
 
@@ -128,7 +128,7 @@ All agents are structurally identical OpenClaw instances. They self-organize thr
 
 ### Prerequisites
 
-- A GitHub repository with a `PROJECT.md` file describing your goals
+- A GitHub repository with a `SWARM.md` file describing your goals
 - An Anthropic API key
 - A GitHub personal access token (with `repo` scope)
 - Either: [kind](https://kind.sigs.k8s.io/) installed (for local clusters) or an existing kubeconfig
@@ -161,16 +161,16 @@ cd clawstown
 2. The [OpenClaw Operator](https://github.com/openclaw-rocks/k8s-operator) is installed via Helm
 3. API keys and GitHub tokens are stored as Kubernetes Secrets
 4. Agent instances are deployed with the self-organizing prompt and GitHub access
-5. The first agent reads PROJECT.md from the repo and creates issues
+5. The first agent reads SWARM.md from the repo and creates issues
 6. Agents start claiming issues, coding, opening PRs, and reviewing each other
 7. After each merge, agents run tests and create issues from any failures
 
 ### Steering the Swarm
 
-The human steers by editing `PROJECT.md` in the target repo:
+The human steers by editing `SWARM.md` in the target repo:
 
 ```markdown
-# PROJECT.md
+# SWARM.md
 
 ## Goals
 - Add user authentication with JWT tokens
@@ -181,7 +181,7 @@ The human steers by editing `PROJECT.md` in the target repo:
 Start with the JWT middleware — everything else depends on it.
 ```
 
-Push a change to PROJECT.md and the agents pick it up on their next pull. No redeployment needed.
+Push a change to SWARM.md and the agents pick it up on their next pull. No redeployment needed.
 
 ### Monitor
 
@@ -201,7 +201,7 @@ kubectl logs -f -n clawstown sts/clawstown-agent-0 -c openclaw
 
 | Parameter | Required | Default | Description |
 |---|---|---|---|
-| `--repo` | Yes | — | GitHub repository URL (must contain PROJECT.md) |
+| `--repo` | Yes | — | GitHub repository URL (must contain SWARM.md) |
 | `--anthropic-api-key` | Yes | `$ANTHROPIC_API_KEY` | Anthropic API key |
 | `--github-token` | Yes | `$GITHUB_TOKEN` | GitHub PAT with `repo` scope |
 | `--agents` | No | `2` | Number of agents |
@@ -240,7 +240,7 @@ Clawstown does not aim to replace Gastown. It aims to show that the same idea �
 | **Merge strategy** | Refinery (serialized) | GitHub branch protection + peer review |
 | **Cost control** | None built-in | K8s resource limits + metrics |
 | **State after crash** | Beads in Git | GitHub Issues (external) |
-| **Human steering** | Rewrite project description | Update PROJECT.md in repo |
+| **Human steering** | Rewrite project description | Update SWARM.md in repo |
 
 ## Project Status
 

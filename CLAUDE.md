@@ -52,26 +52,26 @@ Each agent is an `OpenClawInstance` custom resource managed by the OpenClaw Kube
 - Observability (Prometheus metrics, ServiceMonitor, Grafana dashboards)
 - Self-configuration (agents can install skills via OpenClawSelfConfig)
 
-### PROJECT.md as the Spec
+### SWARM.md as the Spec
 
-The target repository must contain a `PROJECT.md` file that describes what the swarm should accomplish. This file is maintained by the human, never modified by agents. The human can update it at any time — agents re-read it from the repo and adjust.
+The target repository must contain a `SWARM.md` file that describes what the swarm should accomplish. This file is maintained by the human, never modified by agents. The human can update it at any time — agents re-read it from the repo and adjust.
 
 This means:
 - `--repo` is the only required argument (besides auth)
 - No `--description` flag needed — the spec lives in the repo
-- The human can steer the swarm mid-flight by pushing changes to PROJECT.md
-- The repo's README describes what the project *is*; PROJECT.md describes what the swarm should *do*
+- The human can steer the swarm mid-flight by pushing changes to SWARM.md
+- The repo's README describes what the project *is*; SWARM.md describes what the swarm should *do*
 
 ### Self-Organizing Agents (No Mayor)
 
 All agents are structurally identical. There is no central coordinator. Agents self-organize through GitHub:
 
-- The first agent to start bootstraps by reading PROJECT.md and creating issues
+- The first agent to start bootstraps by reading SWARM.md and creating issues
 - Agents claim issues by self-assigning and adding the `clawstown:in-progress` label
 - Agents review each other's PRs (any non-author agent can review)
 - A PR needs at least one peer approval before merge
 - After merging, agents run the test suite and create issues from any failures
-- When no work remains, agents check PROJECT.md for unmet goals and create new issues
+- When no work remains, agents check SWARM.md for unmet goals and create new issues
 
 This eliminates the Mayor as a single point of failure and bottleneck. The tradeoff is that initial work decomposition may be less coordinated, but the continuous feedback loop (test, verify, create issues) compensates.
 
@@ -103,7 +103,7 @@ Default configuration is 2 agents. This is enough to demonstrate coordination (o
 ### Prompts
 
 - The agent prompt lives in `prompts/agent.md`
-- The prompt must instruct agents to read PROJECT.md from the target repo
+- The prompt must instruct agents to read SWARM.md from the target repo
 - The prompt must instruct agents to communicate through GitHub (issues, PR comments)
 - The prompt must require peer review before merging PRs
 - The prompt must instruct agents to run tests after merging and create issues from failures

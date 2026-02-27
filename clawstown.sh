@@ -3,7 +3,7 @@
 # clawstown.sh -- Deploy a Clawstown agent swarm on Kubernetes
 #
 # Deploys an OpenClaw-based development swarm: N self-organizing agents
-# coordinating through GitHub Issues and PRs. Agents read PROJECT.md
+# coordinating through GitHub Issues and PRs. Agents read SWARM.md
 # from the target repository to understand their goals.
 #
 # Usage:
@@ -88,7 +88,7 @@ Modes:
 
   --help                    Show this help message
 
-The target repository must contain a PROJECT.md file describing the goals
+The target repository must contain a SWARM.md file describing the goals
 for the swarm. Agents read it on startup and self-organize around its goals.
 USAGE
   exit 0
@@ -474,7 +474,7 @@ print_status() {
   echo ""
   echo -e "${BOLD}Next steps:${NC}"
   echo ""
-  echo "  1. Ensure PROJECT.md exists in the target repository with your goals."
+  echo "  1. Ensure SWARM.md exists in the target repository with your goals."
   echo ""
   echo "  2. Kick off any agent via its gateway:"
   echo ""
