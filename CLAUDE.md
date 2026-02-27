@@ -12,17 +12,10 @@ This project is maintained by the same team that maintains the [OpenClaw k8s-ope
 clawstown/
   clawstown.sh              # Main entry point — deploys a swarm
   manifests/
-    mayor.yaml              # OpenClawInstance manifest for the Mayor
-    worker.yaml             # OpenClawInstance template for workers
     namespace.yaml          # Namespace + base resources
     secrets.yaml.tpl        # Secret template (never committed with values)
   prompts/
-    mayor.md                # Mayor system prompt (coordinator, reviewer)
-    worker.md               # Base worker system prompt (developer)
-    roles/                  # Optional role-specific prompt additions
-      backend.md
-      frontend.md
-      testing.md
+    agent.md                # Agent system prompt (self-organizing developer)
   kind/
     cluster.yaml            # Kind cluster configuration
   scripts/
@@ -59,32 +52,32 @@ Each agent is an `OpenClawInstance` custom resource managed by the OpenClaw Kube
 - Observability (Prometheus metrics, ServiceMonitor, Grafana dashboards)
 - Self-configuration (agents can install skills via OpenClawSelfConfig)
 
-### Roles: Mayor + Workers
+### PROJECT.md as the Spec
 
-The swarm has two structural roles:
+The target repository must contain a `PROJECT.md` file that describes what the swarm should accomplish. This file is maintained by the human, never modified by agents. The human can update it at any time — agents re-read it from the repo and adjust.
 
-**Mayor**: Coordinator and final reviewer. Never writes production code. Responsibilities:
-- Read the project description
-- Analyze the target repository
-- Decompose work into GitHub issues with clear acceptance criteria
-- Assign issues to workers
-- Review PRs against issue requirements
-- Request changes or approve and merge
-- Track overall progress
+This means:
+- `--repo` is the only required argument (besides auth)
+- No `--description` flag needed — the spec lives in the repo
+- The human can steer the swarm mid-flight by pushing changes to PROJECT.md
+- The repo's README describes what the project *is*; PROJECT.md describes what the swarm should *do*
 
-**Worker**: Developer. Responsibilities:
-- Poll for assigned GitHub issues
-- Create feature branches
-- Implement changes according to issue requirements
-- Write tests
-- Open PRs with clear descriptions linking back to the issue
-- Respond to review comments from the Mayor
+### Self-Organizing Agents (No Mayor)
 
-Workers can optionally have role hints (backend, frontend, testing) that add domain-specific instructions to their base prompt, but they are structurally identical OpenClaw instances.
+All agents are structurally identical. There is no central coordinator. Agents self-organize through GitHub:
+
+- The first agent to start bootstraps by reading PROJECT.md and creating issues
+- Agents claim issues by self-assigning and adding the `clawstown:in-progress` label
+- Agents review each other's PRs (any non-author agent can review)
+- A PR needs at least one peer approval before merge
+- After merging, agents run the test suite and create issues from any failures
+- When no work remains, agents check PROJECT.md for unmet goals and create new issues
+
+This eliminates the Mayor as a single point of failure and bottleneck. The tradeoff is that initial work decomposition may be less coordinated, but the continuous feedback loop (test, verify, create issues) compensates.
 
 ### Small Swarm by Default
 
-Default configuration is 1 Mayor + 2 Workers = 3 agents. This is enough to demonstrate coordination while keeping costs manageable. Scale up by increasing `--workers`.
+Default configuration is 2 agents. This is enough to demonstrate coordination (one implements, one reviews) while keeping costs manageable. Scale up by increasing `--agents`.
 
 ## Development Guidelines
 
@@ -109,10 +102,11 @@ Default configuration is 1 Mayor + 2 Workers = 3 agents. This is enough to demon
 
 ### Prompts
 
-- Prompts live in `prompts/` as Markdown files
-- The Mayor prompt must explicitly forbid writing production code
-- The Worker prompt must require linking PRs to issues
-- All prompts must instruct agents to communicate through GitHub (issues, PR comments)
+- The agent prompt lives in `prompts/agent.md`
+- The prompt must instruct agents to read PROJECT.md from the target repo
+- The prompt must instruct agents to communicate through GitHub (issues, PR comments)
+- The prompt must require peer review before merging PRs
+- The prompt must instruct agents to run tests after merging and create issues from failures
 - Prompts should be model-agnostic where possible (don't rely on Claude-specific features)
 - Keep prompts focused — the agent's power comes from OpenClaw's capabilities, not from prompt length
 
@@ -121,12 +115,12 @@ Default configuration is 1 Mayor + 2 Workers = 3 agents. This is enough to demon
 Agents coordinate through GitHub using these conventions:
 
 **Issue Labels:**
-- `clawstown:task` — A work item created by the Mayor
-- `clawstown:in-progress` — A worker has started on this issue
-- `clawstown:review` — A PR is open and awaiting Mayor review
+- `clawstown:task` — A work item
+- `clawstown:in-progress` — An agent is working on this issue
+- `clawstown:review` — A PR is open and awaiting peer review
 - `clawstown:blocked` — Work is blocked (comment explains why)
 - `clawstown:done` — Issue is complete and PR is merged
-- `role:backend`, `role:frontend`, `role:testing` — Role hints for assignment
+- `clawstown:failing` — Tests are failing after a merge
 
 **Branch Naming:**
 - `clawstown/<issue-number>-<short-description>` (e.g., `clawstown/42-add-jwt-auth`)
@@ -136,18 +130,19 @@ Agents coordinate through GitHub using these conventions:
 - Body: Must reference the issue (`Closes #42`)
 - Must include a test plan
 - Must not include unrelated changes
+- Must have at least one peer approval before merge
 
 **Issue Convention:**
 - Title: Clear, actionable description
 - Body: Acceptance criteria as a checklist
 - Labels: At minimum `clawstown:task`
-- Assignee: The worker responsible (or unassigned for any worker to pick up)
+- Assignee: The agent working on it (or unassigned for any agent to pick up)
 
 ### Testing
 
 - `clawstown.sh` should have a `--dry-run` mode that generates manifests without applying them
 - Integration tests run against a Kind cluster
-- Test the full flow: deploy → Mayor creates issues → Worker opens PR → Mayor reviews
+- Test the full flow: deploy → agent creates issues → another agent reviews PR
 - Mock GitHub API for unit tests of coordination logic
 
 ## Key Dependencies

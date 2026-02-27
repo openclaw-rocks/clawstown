@@ -2,13 +2,14 @@
 #
 # clawstown.sh -- Deploy a Clawstown agent swarm on Kubernetes
 #
-# Deploys an OpenClaw-based development swarm: one Mayor (coordinator/reviewer)
-# and N Workers (developers), coordinating through GitHub Issues and PRs.
+# Deploys an OpenClaw-based development swarm: N self-organizing agents
+# coordinating through GitHub Issues and PRs. Agents read PROJECT.md
+# from the target repository to understand their goals.
 #
 # Usage:
-#   ./clawstown.sh --repo <github-url> --description "project goals" [options]
+#   ./clawstown.sh --repo <github-url> [options]
 #   ./clawstown.sh --teardown [--namespace <ns>] [--delete-cluster]
-#   ./clawstown.sh --dry-run --repo <github-url> --description "project goals"
+#   ./clawstown.sh --dry-run --repo <github-url>
 
 set -euo pipefail
 
@@ -24,17 +25,13 @@ CRD_API_VERSION="openclaw.rocks/v1alpha1"
 # Defaults
 # -----------------------------------------------------------------------------
 NAMESPACE="clawstown"
-WORKERS=2
-MAYOR_MODEL="anthropic/claude-sonnet-4-20250514"
-WORKER_MODEL="anthropic/claude-sonnet-4-20250514"
+AGENTS=2
+MODEL="anthropic/claude-sonnet-4-20250514"
 CLUSTER_NAME="clawstown"
 REPO=""
-DESCRIPTION=""
-DESCRIPTION_FILE=""
 ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}"
 GITHUB_TOKEN="${GITHUB_TOKEN:-}"
 KUBECONFIG_PATH="${KUBECONFIG:-}"
-WORKER_ROLES=""
 DRY_RUN=false
 TEARDOWN=false
 DELETE_CLUSTER=false
@@ -70,8 +67,6 @@ Usage: clawstown.sh [options]
 
 Deploy:
   --repo <url>              GitHub repository URL (required)
-  --description <text>      Project description / goal (required unless --description-file)
-  --description-file <path> Read project description from file
 
 Authentication:
   --anthropic-api-key <key> Anthropic API key (default: $ANTHROPIC_API_KEY)
@@ -83,10 +78,8 @@ Cluster:
   --namespace <ns>          Kubernetes namespace (default: clawstown)
 
 Swarm:
-  --workers <n>             Number of worker agents (default: 2)
-  --mayor-model <model>     Model for the Mayor (default: anthropic/claude-sonnet-4-20250514)
-  --worker-model <model>    Model for workers (default: anthropic/claude-sonnet-4-20250514)
-  --worker-roles <roles>    Comma-separated role hints (e.g. backend,frontend,testing)
+  --agents <n>              Number of agents (default: 2)
+  --model <model>           Model for agents (default: anthropic/claude-sonnet-4-20250514)
 
 Modes:
   --dry-run                 Generate manifests to stdout without applying
@@ -94,6 +87,9 @@ Modes:
   --delete-cluster          Also delete the Kind cluster (with --teardown)
 
   --help                    Show this help message
+
+The target repository must contain a PROJECT.md file describing the goals
+for the swarm. Agents read it on startup and self-organize around its goals.
 USAGE
   exit 0
 }
@@ -105,17 +101,13 @@ parse_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --repo)              REPO="$2"; shift 2 ;;
-      --description)       DESCRIPTION="$2"; shift 2 ;;
-      --description-file)  DESCRIPTION_FILE="$2"; shift 2 ;;
       --anthropic-api-key) ANTHROPIC_API_KEY="$2"; shift 2 ;;
       --github-token)      GITHUB_TOKEN="$2"; shift 2 ;;
       --kubeconfig)        KUBECONFIG_PATH="$2"; shift 2 ;;
       --cluster-name)      CLUSTER_NAME="$2"; shift 2 ;;
       --namespace)         NAMESPACE="$2"; shift 2 ;;
-      --workers)           WORKERS="$2"; shift 2 ;;
-      --mayor-model)       MAYOR_MODEL="$2"; shift 2 ;;
-      --worker-model)      WORKER_MODEL="$2"; shift 2 ;;
-      --worker-roles)      WORKER_ROLES="$2"; shift 2 ;;
+      --agents)            AGENTS="$2"; shift 2 ;;
+      --model)             MODEL="$2"; shift 2 ;;
       --dry-run)           DRY_RUN=true; shift ;;
       --teardown)          TEARDOWN=true; shift ;;
       --delete-cluster)    DELETE_CLUSTER=true; shift ;;
@@ -146,18 +138,6 @@ validate_deploy() {
     fatal "--repo is required"
   fi
 
-  # Load description from file if specified
-  if [ -n "$DESCRIPTION_FILE" ]; then
-    if [ ! -f "$DESCRIPTION_FILE" ]; then
-      fatal "Description file not found: $DESCRIPTION_FILE"
-    fi
-    DESCRIPTION="$(cat "$DESCRIPTION_FILE")"
-  fi
-
-  if [ -z "$DESCRIPTION" ]; then
-    fatal "--description or --description-file is required"
-  fi
-
   if [ -z "$ANTHROPIC_API_KEY" ]; then
     fatal "--anthropic-api-key or \$ANTHROPIC_API_KEY is required"
   fi
@@ -166,8 +146,8 @@ validate_deploy() {
     fatal "--github-token or \$GITHUB_TOKEN is required"
   fi
 
-  if ! [[ "$WORKERS" =~ ^[0-9]+$ ]] || [ "$WORKERS" -lt 1 ]; then
-    fatal "--workers must be a positive integer"
+  if ! [[ "$AGENTS" =~ ^[0-9]+$ ]] || [ "$AGENTS" -lt 1 ]; then
+    fatal "--agents must be a positive integer"
   fi
 }
 
@@ -314,7 +294,7 @@ EOF
 setup_github_labels() {
   if ! command -v gh &>/dev/null; then
     warn "gh CLI not found -- skipping GitHub label setup"
-    warn "Create these labels manually: clawstown:task, clawstown:in-progress, clawstown:review, clawstown:blocked, clawstown:done"
+    warn "Create these labels manually: clawstown:task, clawstown:in-progress, clawstown:review, clawstown:blocked, clawstown:done, clawstown:failing"
     return
   fi
 
@@ -324,14 +304,12 @@ setup_github_labels() {
   repo_slug=$(echo "$REPO" | sed -E 's|https?://github\.com/||; s|\.git$||; s|/$||')
 
   local -a labels=(
-    "clawstown:task|0075ca|Work item created by the Mayor"
-    "clawstown:in-progress|fbca04|Worker has started on this issue"
-    "clawstown:review|d4c5f9|PR awaiting Mayor review"
+    "clawstown:task|0075ca|Work item for the swarm"
+    "clawstown:in-progress|fbca04|An agent is working on this issue"
+    "clawstown:review|d4c5f9|PR awaiting peer review"
     "clawstown:blocked|e4e669|Blocked on a dependency"
     "clawstown:done|0e8a16|Complete and merged"
-    "role:backend|c2e0c6|Backend-focused work"
-    "role:frontend|bfdadc|Frontend-focused work"
-    "role:testing|d4c5f9|Testing-focused work"
+    "clawstown:failing|b60205|Tests are failing after merge"
   )
 
   for entry in "${labels[@]}"; do
@@ -364,54 +342,44 @@ indent_file() {
   done < "$file"
 }
 
-indent_string() {
-  local content="$1"
-  local spaces="$2"
-  local padding
-  padding=$(printf "%${spaces}s" "")
-  echo "$content" | while IFS= read -r line || [ -n "$line" ]; do
-    if [ -z "$line" ]; then
-      echo ""
-    else
-      echo "${padding}${line}"
-    fi
-  done
-}
 
 # -----------------------------------------------------------------------------
-# Mayor manifest
+# Agent manifest
 # -----------------------------------------------------------------------------
-generate_mayor_manifest() {
+generate_agent_manifest() {
+  local agent_id="$1"
+  local agent_name="clawstown-agent-${agent_id}"
+
   cat <<EOF
 ---
 apiVersion: ${CRD_API_VERSION}
 kind: OpenClawInstance
 metadata:
-  name: clawstown-mayor
+  name: ${agent_name}
   namespace: ${NAMESPACE}
   labels:
     app.kubernetes.io/part-of: clawstown
-    app.kubernetes.io/component: mayor
-    clawstown.openclaw.rocks/role: mayor
+    app.kubernetes.io/component: agent
+    clawstown.openclaw.rocks/agent-id: "${agent_id}"
 spec:
   config:
     raw:
       agents:
         defaults:
           model:
-            primary: "${MAYOR_MODEL}"
+            primary: "${MODEL}"
   envFrom:
     - secretRef:
         name: clawstown-api-keys
     - secretRef:
         name: clawstown-github
   env:
-    - name: CLAWSTOWN_ROLE
-      value: "mayor"
     - name: CLAWSTOWN_REPO
       value: "${REPO}"
-    - name: CLAWSTOWN_WORKER_COUNT
-      value: "${WORKERS}"
+    - name: CLAWSTOWN_AGENT_ID
+      value: "${agent_id}"
+    - name: CLAWSTOWN_AGENT_COUNT
+      value: "${AGENTS}"
   resources:
     requests:
       cpu: "500m"
@@ -430,117 +398,19 @@ spec:
   workspace:
     initialFiles:
       "CLAWSTOWN.md": |
-$(indent_file "${SCRIPT_DIR}/prompts/mayor.md" 8)
-      "PROJECT.md": |
-$(indent_string "$DESCRIPTION" 8)
+$(indent_file "${SCRIPT_DIR}/prompts/agent.md" 8)
 EOF
 }
 
 # -----------------------------------------------------------------------------
-# Worker manifest
+# Deploy agents
 # -----------------------------------------------------------------------------
-generate_worker_manifest() {
-  local worker_id="$1"
-  local worker_name="clawstown-worker-${worker_id}"
-
-  # Determine role hint if provided
-  local role_hint=""
-  if [ -n "$WORKER_ROLES" ]; then
-    local roles_array
-    IFS=',' read -ra roles_array <<< "$WORKER_ROLES"
-    local role_index=$((worker_id % ${#roles_array[@]}))
-    role_hint="${roles_array[$role_index]}"
-  fi
-
-  # Build role-specific env var section
-  local role_env=""
-  if [ -n "$role_hint" ]; then
-    role_env="    - name: CLAWSTOWN_WORKER_ROLE
-      value: \"${role_hint}\""
-  fi
-
-  # Build role-specific workspace file
-  local role_file_section=""
-  local role_file="${SCRIPT_DIR}/prompts/roles/${role_hint}.md"
-  if [ -n "$role_hint" ] && [ -f "$role_file" ]; then
-    role_file_section="      \"CLAWSTOWN_ROLE_HINT.md\": |
-$(indent_file "$role_file" 8)"
-  fi
-
-  cat <<EOF
----
-apiVersion: ${CRD_API_VERSION}
-kind: OpenClawInstance
-metadata:
-  name: ${worker_name}
-  namespace: ${NAMESPACE}
-  labels:
-    app.kubernetes.io/part-of: clawstown
-    app.kubernetes.io/component: worker
-    clawstown.openclaw.rocks/role: worker
-    clawstown.openclaw.rocks/worker-id: "${worker_id}"
-spec:
-  config:
-    raw:
-      agents:
-        defaults:
-          model:
-            primary: "${WORKER_MODEL}"
-  envFrom:
-    - secretRef:
-        name: clawstown-api-keys
-    - secretRef:
-        name: clawstown-github
-  env:
-    - name: CLAWSTOWN_ROLE
-      value: "worker"
-    - name: CLAWSTOWN_REPO
-      value: "${REPO}"
-    - name: CLAWSTOWN_WORKER_ID
-      value: "${worker_id}"
-${role_env}
-  resources:
-    requests:
-      cpu: "500m"
-      memory: "1Gi"
-    limits:
-      cpu: "2000m"
-      memory: "4Gi"
-  storage:
-    persistence:
-      enabled: true
-      size: 10Gi
-  security:
-    networkPolicy:
-      enabled: true
-      allowDNS: true
-  workspace:
-    initialFiles:
-      "CLAWSTOWN.md": |
-$(indent_file "${SCRIPT_DIR}/prompts/worker.md" 8)
-      "PROJECT.md": |
-$(indent_string "$DESCRIPTION" 8)
-${role_file_section}
-EOF
-}
-
-# -----------------------------------------------------------------------------
-# Deploy instances
-# -----------------------------------------------------------------------------
-deploy_mayor() {
-  log "Deploying Mayor..."
-  generate_mayor_manifest | kube_apply
-  if [ "$DRY_RUN" != true ]; then
-    log "Mayor deployed: clawstown-mayor"
-  fi
-}
-
-deploy_workers() {
-  log "Deploying ${WORKERS} worker(s)..."
-  for i in $(seq 0 $((WORKERS - 1))); do
-    generate_worker_manifest "$i" | kube_apply
+deploy_agents() {
+  log "Deploying ${AGENTS} agent(s)..."
+  for i in $(seq 0 $((AGENTS - 1))); do
+    generate_agent_manifest "$i" | kube_apply
     if [ "$DRY_RUN" != true ]; then
-      log "Worker deployed: clawstown-worker-${i}"
+      log "Agent deployed: clawstown-agent-${i}"
     fi
   done
 }
@@ -554,43 +424,32 @@ wait_for_ready() {
   local timeout=300
   local interval=5
   local elapsed=0
-  local total=$((WORKERS + 1))
 
   while [ "$elapsed" -lt "$timeout" ]; do
     local ready=0
 
-    # Check Mayor
-    local mayor_phase
-    mayor_phase=$(kubectl_cmd get openclawinstance clawstown-mayor \
-      -n "$NAMESPACE" \
-      -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-    if [ "$mayor_phase" = "Running" ]; then
-      ready=$((ready + 1))
-    fi
-
-    # Check Workers
-    for i in $(seq 0 $((WORKERS - 1))); do
-      local worker_phase
-      worker_phase=$(kubectl_cmd get openclawinstance "clawstown-worker-${i}" \
+    for i in $(seq 0 $((AGENTS - 1))); do
+      local agent_phase
+      agent_phase=$(kubectl_cmd get openclawinstance "clawstown-agent-${i}" \
         -n "$NAMESPACE" \
         -o jsonpath='{.status.phase}' 2>/dev/null || echo "Unknown")
-      if [ "$worker_phase" = "Running" ]; then
+      if [ "$agent_phase" = "Running" ]; then
         ready=$((ready + 1))
       fi
     done
 
-    if [ "$ready" -eq "$total" ]; then
-      log "All ${total} instances are running"
+    if [ "$ready" -eq "$AGENTS" ]; then
+      log "All ${AGENTS} agents are running"
       return 0
     fi
 
-    echo -ne "\r  ${ready}/${total} instances ready (${elapsed}s elapsed)..."
+    echo -ne "\r  ${ready}/${AGENTS} agents ready (${elapsed}s elapsed)..."
     sleep "$interval"
     elapsed=$((elapsed + interval))
   done
 
   echo ""
-  warn "Timed out waiting for all instances to become ready"
+  warn "Timed out waiting for all agents to become ready"
   warn "Run 'kubectl get openclawinstances -n ${NAMESPACE}' to check status"
   return 1
 }
@@ -606,41 +465,36 @@ print_status() {
   echo ""
   echo -e "  Namespace:   ${BLUE}${NAMESPACE}${NC}"
   echo -e "  Repository:  ${BLUE}${REPO}${NC}"
-  echo -e "  Mayor:       clawstown-mayor (${MAYOR_MODEL})"
-  echo -e "  Workers:     ${WORKERS} (${WORKER_MODEL})"
-  if [ -n "$WORKER_ROLES" ]; then
-    echo -e "  Roles:       ${WORKER_ROLES}"
-  fi
+  echo -e "  Agents:      ${AGENTS} (${MODEL})"
   echo ""
   echo -e "${BOLD}Instances:${NC}"
   kubectl_cmd get openclawinstances -n "$NAMESPACE" \
-    -o custom-columns='NAME:.metadata.name,ROLE:.metadata.labels.clawstown\.openclaw\.rocks/role,PHASE:.status.phase' \
+    -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' \
     2>/dev/null || echo "  (unable to fetch instance status)"
   echo ""
   echo -e "${BOLD}Next steps:${NC}"
   echo ""
-  echo "  1. Send the Mayor its first instruction via the gateway:"
+  echo "  1. Ensure PROJECT.md exists in the target repository with your goals."
   echo ""
-  echo "     # Port-forward to the Mayor's gateway"
-  echo "     kubectl port-forward -n ${NAMESPACE} svc/clawstown-mayor 18789:18789 &"
+  echo "  2. Kick off any agent via its gateway:"
+  echo ""
+  echo "     # Port-forward to an agent's gateway"
+  echo "     kubectl port-forward -n ${NAMESPACE} svc/clawstown-agent-0 18789:18789 &"
   echo ""
   echo "     # Open the webchat UI"
   echo "     open http://localhost:18789"
   echo ""
-  echo "     # Or send a message via the API"
-  echo "     GATEWAY_TOKEN=\$(kubectl get secret -n ${NAMESPACE} clawstown-mayor-gateway-token -o jsonpath='{.data.token}' | base64 -d)"
+  echo "  3. Tell the agent to begin:"
+  echo "     \"Read CLAWSTOWN.md, then clone the repo and start working.\""
   echo ""
-  echo "  2. Tell the Mayor to begin:"
-  echo "     \"Read CLAWSTOWN.md and PROJECT.md, then analyze the repository and start creating issues.\""
-  echo ""
-  echo "  3. Monitor the swarm:"
-  echo "     kubectl logs -f -n ${NAMESPACE} sts/clawstown-mayor -c openclaw"
+  echo "  4. Monitor the swarm:"
+  echo "     kubectl logs -f -n ${NAMESPACE} sts/clawstown-agent-0 -c openclaw"
   echo "     kubectl get openclawinstances -n ${NAMESPACE} -w"
   echo ""
-  echo "  4. Watch progress on GitHub:"
+  echo "  5. Watch progress on GitHub:"
   echo "     ${REPO}/issues"
   echo ""
-  echo "  5. Tear down when done:"
+  echo "  6. Tear down when done:"
   echo "     ./clawstown.sh --teardown --namespace ${NAMESPACE}"
   echo ""
 }
@@ -697,7 +551,7 @@ main() {
   echo ""
   echo -e "${BOLD}Clawstown${NC} -- Deploying agent swarm"
   echo -e "  Repository:  ${REPO}"
-  echo -e "  Workers:     ${WORKERS}"
+  echo -e "  Agents:      ${AGENTS}"
   echo -e "  Namespace:   ${NAMESPACE}"
   if [ "$DRY_RUN" = true ]; then
     echo -e "  Mode:        ${YELLOW}dry-run (manifests only)${NC}"
@@ -708,8 +562,7 @@ main() {
     # In dry-run mode, just output all manifests
     create_namespace
     create_secrets
-    deploy_mayor
-    deploy_workers
+    deploy_agents
     exit 0
   fi
 
@@ -725,8 +578,7 @@ main() {
   create_namespace
   create_secrets
   setup_github_labels
-  deploy_mayor
-  deploy_workers
+  deploy_agents
   wait_for_ready || true
   print_status
 }

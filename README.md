@@ -41,11 +41,19 @@ Each agent is an [OpenClaw](https://github.com/openclaw/openclaw) instance manag
 - **Multi-node**: The swarm can span multiple machines. Lose a node, Kubernetes reschedules the agents. The town survives.
 - **Observability built in**: Prometheus metrics, Grafana dashboards, structured logging. Know exactly what your swarm is doing and what it costs.
 
+### Self-Organizing, Not Top-Down
+
+Gastown has a Mayor that plans all work upfront. Clawstown agents **self-organize**.
+
+Every agent is identical. The first agent to start reads `PROJECT.md` from the repository, analyzes the codebase, and creates GitHub issues. Other agents claim unclaimed issues, implement changes, and review each other's PRs. After merging, agents run the test suite and create new issues from any failures. When goals from PROJECT.md are met, they stop.
+
+No single point of failure. No coordinator bottleneck. No role assignments at deploy time. The swarm figures it out.
+
 ### A Small Swarm is Still a Swarm
 
-Gastown targets 20-30 agents. Clawstown starts at **3**: one Mayor and two workers. This is intentional.
+Gastown targets 20-30 agents. Clawstown starts at **2**. This is intentional.
 
-Running 30 agents at $100/hour is a bold statement. Running 3-5 agents that coordinate cleanly, produce reviewable PRs, and never lose state is a useful tool. You can scale up when you need to — the operator handles it — but the default is a small, focused swarm that a single developer can steer.
+Running 30 agents at $100/hour is a bold statement. Running 2-5 agents that coordinate cleanly, produce reviewable PRs, and never lose state is a useful tool. You can scale up when you need to — the operator handles it — but the default is a small, focused swarm that a single developer can steer.
 
 ## Architecture
 
@@ -55,59 +63,52 @@ Running 30 agents at $100/hour is a bold statement. Running 3-5 agents that coor
                     |  (Human)  |
                     +-----+-----+
                           |
-                    project description
-                    + GitHub repo
+                    PROJECT.md in repo
+                    (goals & focus)
                           |
                           v
-               +----------+----------+
-               |       Mayor         |
-               |  (OpenClaw Instance)|
-               |                     |
-               |  - Decomposes work  |
-               |  - Creates issues   |
-               |  - Reviews PRs      |
-               |  - Final quality    |
-               |    gate             |
-               +----+--------+------+
-                    |        |
-             assigns issues  reviews PRs
-                    |        |
           +---------+--+  +--+---------+
-          |  Worker 1  |  |  Worker 2  |        ... Worker N
+          |  Agent 0   |  |  Agent 1   |        ... Agent N
           |  (OpenClaw |  |  (OpenClaw |        (scales via
           |  Instance) |  |  Instance) |         operator)
           |            |  |            |
-          | - Picks up |  | - Picks up |
+          | - Reads    |  | - Reads    |
+          |   PROJECT  |  |   PROJECT  |
+          | - Creates  |  | - Claims   |
           |   issues   |  |   issues   |
-          | - Codes in |  | - Codes in |
-          |   branches |  |   branches |
-          | - Opens    |  | - Opens    |
-          |   PRs      |  |   PRs      |
+          | - Codes    |  | - Codes    |
+          | - Reviews  |  | - Reviews  |
+          |   peers    |  |   peers    |
+          | - Runs     |  | - Runs     |
+          |   tests    |  |   tests    |
           +-----+------+  +------+-----+
                 |                 |
                 +--------+--------+
                          |
                     GitHub Repo
                   (coordination
-                     backbone)
+                   backbone)
+                         |
+                   +-----+-----+
+                   | PROJECT.md |
+                   | (the spec) |
+                   +------------+
 ```
 
-### Roles
+### How It Works
 
-**Mayor** — The coordinator. Receives the project description, decomposes it into GitHub issues, assigns work to workers, and reviews every PR before merge. The Mayor never writes production code. It thinks, plans, and judges. It is the final reviewer.
+All agents are structurally identical OpenClaw instances. They self-organize through a shared protocol:
 
-**Worker** — The builder. Each worker picks up assigned GitHub issues, creates a feature branch, implements the change, writes tests, and opens a PR. Workers can be given specialized roles through their OpenClaw configuration (e.g., "you are a backend specialist" or "you focus on testing"), but structurally they are identical OpenClaw instances.
-
-### Coordination Flow
-
-1. **Human** provides a project description and target GitHub repository to `clawstown.sh`
-2. **clawstown.sh** deploys the operator and creates the Mayor + Worker instances on Kubernetes
-3. **Mayor** reads the project description, analyzes the repository, and creates GitHub issues with clear acceptance criteria
-4. **Mayor** assigns issues to workers via GitHub labels or assignees
-5. **Workers** poll for assigned issues, create branches, implement changes, and open PRs
-6. **Mayor** reviews PRs against the original issue requirements, requests changes or approves
-7. **Mayor** merges approved PRs and updates the project status
-8. **Human** monitors progress through GitHub's native UI — issues, PRs, and the project board
+1. **Human** creates `PROJECT.md` in the target repository describing goals for the swarm
+2. **Human** runs `clawstown.sh` with `--repo` pointing to the repository
+3. **clawstown.sh** deploys the operator and creates N agent instances on Kubernetes
+4. **First agent** clones the repo, reads PROJECT.md, analyzes the codebase, and creates GitHub issues
+5. **All agents** claim unclaimed issues, create branches, implement changes, and open PRs
+6. **Agents** review each other's PRs — at least one non-author approval required before merge
+7. **After merging**, agents pull latest main and run the test suite
+8. **If tests fail**, agents create new `clawstown:failing` issues from the failures
+9. **Agents** continuously check PROJECT.md goals against the current state of the codebase
+10. **Human** steers the swarm by updating PROJECT.md — agents pick up changes on their next pull
 
 ### Why GitHub for Coordination
 
@@ -121,13 +122,13 @@ Running 30 agents at $100/hour is a bold statement. Running 3-5 agents that coor
 | **Auditability** | Query Dolt tables | Read the issue tracker |
 | **Setup cost** | Install Dolt + Beads + Gas Town CLI | Have a GitHub account |
 | **Failure recovery** | Seance (context recovery from dead sessions) | K8s restarts pod, agent reads issue state from GitHub |
-| **Merge serialization** | Refinery (single-threaded queue) | GitHub branch protection + Mayor review |
+| **Merge serialization** | Refinery (single-threaded queue) | GitHub branch protection + peer review |
 
 ## Quick Start
 
 ### Prerequisites
 
-- A GitHub repository to work on
+- A GitHub repository with a `PROJECT.md` file describing your goals
 - An Anthropic API key
 - A GitHub personal access token (with `repo` scope)
 - Either: [kind](https://kind.sigs.k8s.io/) installed (for local clusters) or an existing kubeconfig
@@ -139,23 +140,19 @@ Running 30 agents at $100/hour is a bold statement. Running 3-5 agents that coor
 git clone https://github.com/openclaw-rocks/clawstown.git
 cd clawstown
 
-# Start a local swarm with 2 workers
+# Start a local swarm with 2 agents (default)
 ./clawstown.sh \
   --repo https://github.com/your-org/your-project \
-  --description "Add user authentication with JWT tokens and role-based access control" \
   --anthropic-api-key $ANTHROPIC_API_KEY \
-  --github-token $GITHUB_TOKEN \
-  --workers 2
+  --github-token $GITHUB_TOKEN
 
-# Or use an existing cluster
+# Scale up to 4 agents on an existing cluster
 ./clawstown.sh \
   --repo https://github.com/your-org/your-project \
-  --description "Refactor the payment module to support Stripe and PayPal" \
   --anthropic-api-key $ANTHROPIC_API_KEY \
   --github-token $GITHUB_TOKEN \
   --kubeconfig ~/.kube/config \
-  --namespace clawstown \
-  --workers 4
+  --agents 4
 ```
 
 ### What Happens
@@ -163,10 +160,28 @@ cd clawstown
 1. A Kind cluster spins up (or the provided kubeconfig is used)
 2. The [OpenClaw Operator](https://github.com/openclaw-rocks/k8s-operator) is installed via Helm
 3. API keys and GitHub tokens are stored as Kubernetes Secrets
-4. The **Mayor** instance is deployed with the project description and coordinator prompt
-5. **Worker** instances are deployed with developer prompts and GitHub access
-6. The Mayor begins decomposing work and creating issues
-7. Workers start picking up issues and opening PRs
+4. Agent instances are deployed with the self-organizing prompt and GitHub access
+5. The first agent reads PROJECT.md from the repo and creates issues
+6. Agents start claiming issues, coding, opening PRs, and reviewing each other
+7. After each merge, agents run tests and create issues from any failures
+
+### Steering the Swarm
+
+The human steers by editing `PROJECT.md` in the target repo:
+
+```markdown
+# PROJECT.md
+
+## Goals
+- Add user authentication with JWT tokens
+- Implement role-based access control
+- Write integration tests for all auth endpoints
+
+## Focus
+Start with the JWT middleware — everything else depends on it.
+```
+
+Push a change to PROJECT.md and the agents pick it up on their next pull. No redeployment needed.
 
 ### Monitor
 
@@ -174,11 +189,8 @@ cd clawstown
 # Watch the swarm
 kubectl get openclawinstances -n clawstown
 
-# Follow the Mayor's logs
-kubectl logs -f -n clawstown sts/clawstown-mayor -c openclaw
-
-# Follow a worker's logs
-kubectl logs -f -n clawstown sts/clawstown-worker-0 -c openclaw
+# Follow an agent's logs
+kubectl logs -f -n clawstown sts/clawstown-agent-0 -c openclaw
 
 # Or just check GitHub — that's where all the real action is
 ```
@@ -189,33 +201,25 @@ kubectl logs -f -n clawstown sts/clawstown-worker-0 -c openclaw
 
 | Parameter | Required | Default | Description |
 |---|---|---|---|
-| `--repo` | Yes | — | GitHub repository URL (https or ssh) |
-| `--description` | Yes | — | Project description / goal for the swarm |
+| `--repo` | Yes | — | GitHub repository URL (must contain PROJECT.md) |
 | `--anthropic-api-key` | Yes | `$ANTHROPIC_API_KEY` | Anthropic API key |
 | `--github-token` | Yes | `$GITHUB_TOKEN` | GitHub PAT with `repo` scope |
-| `--workers` | No | `2` | Number of worker agents |
+| `--agents` | No | `2` | Number of agents |
+| `--model` | No | `anthropic/claude-sonnet-4-20250514` | Model for all agents |
 | `--kubeconfig` | No | — | Path to kubeconfig (skips Kind cluster creation) |
 | `--namespace` | No | `clawstown` | Kubernetes namespace |
-| `--mayor-model` | No | `anthropic/claude-sonnet-4-20250514` | Model for the Mayor |
-| `--worker-model` | No | `anthropic/claude-sonnet-4-20250514` | Model for workers |
-| `--worker-roles` | No | — | Comma-separated role hints (e.g., `backend,frontend,testing`) |
 | `--cluster-name` | No | `clawstown` | Kind cluster name (when creating a new cluster) |
 
 ### Customizing Agent Behavior
 
-The Mayor and worker prompts are Markdown files in `prompts/`:
+The agent prompt is a single Markdown file:
 
 ```
 prompts/
-  mayor.md       # System prompt for the Mayor
-  worker.md      # Base system prompt for all workers
-  roles/
-    backend.md   # Additional instructions for backend-focused workers
-    frontend.md  # Additional instructions for frontend-focused workers
-    testing.md   # Additional instructions for testing-focused workers
+  agent.md       # System prompt for all agents
 ```
 
-Edit these to change how agents think, plan, and collaborate. The prompts are the soul of the swarm.
+Edit this to change how agents think, plan, and collaborate. The prompt is the soul of the swarm.
 
 ## Comparison with Gastown
 
@@ -227,14 +231,16 @@ Clawstown does not aim to replace Gastown. It aims to show that the same idea �
 | **Runtime** | Local machine (tmux) | Kubernetes (any cluster) |
 | **Agent framework** | Claude Code CLI (+ others) | OpenClaw |
 | **Coordination** | Beads + Dolt | GitHub Issues + PRs |
-| **Agent count** | 20-30 | 3-5 (scalable) |
+| **Agent count** | 20-30 | 2-5 (scalable) |
+| **Organization** | Hierarchical (Mayor plans) | Self-organizing (agents coordinate as peers) |
 | **Recovery** | Manual (git push --force) | Automatic (K8s self-healing) |
 | **Isolation** | Git worktrees | K8s pods + NetworkPolicies |
 | **Observability** | Logs | Prometheus + Grafana |
 | **Setup** | Go + Dolt + Beads + tmux | `./clawstown.sh` |
-| **Merge strategy** | Refinery (serialized) | GitHub branch protection |
+| **Merge strategy** | Refinery (serialized) | GitHub branch protection + peer review |
 | **Cost control** | None built-in | K8s resource limits + metrics |
 | **State after crash** | Beads in Git | GitHub Issues (external) |
+| **Human steering** | Rewrite project description | Update PROJECT.md in repo |
 
 ## Project Status
 
